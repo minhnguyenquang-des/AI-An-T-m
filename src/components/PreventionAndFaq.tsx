@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ChevronDown,
   ExternalLink,
@@ -13,14 +13,22 @@ import { Language } from "../types/triage";
 
 interface PreventionAndFaqProps {
   language: Language;
+  externalFaqId?: string | null;
   onFindHospital: () => void;
 }
 
 export const PreventionAndFaq: React.FC<PreventionAndFaqProps> = ({
   language,
+  externalFaqId,
   onFindHospital,
 }) => {
   const [openFaqId, setOpenFaqId] = useState<string | null>(FAQ_ITEMS[0].id);
+
+  useEffect(() => {
+    if (externalFaqId) {
+      setOpenFaqId(externalFaqId);
+    }
+  }, [externalFaqId]);
 
   const preventionRules = [
     {

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   BookOpen,
@@ -33,6 +33,8 @@ interface HeroTriageHubProps {
   onChangeTab: (tab: "chat" | "image") => void;
   chatInput: string;
   onChangeChatInput: (val: string) => void;
+  autoAskRequest?: { id: number; prompt: string } | null;
+  onAutoAskHandled?: () => void;
   onFindHospital: () => void;
   history: HistoryEntry[];
   onSaveHistory: (entry: HistoryEntry) => void;
@@ -46,31 +48,59 @@ interface UploadedPhoto {
   masked: boolean;
 }
 
+function drawResizedImage(img: HTMLImageElement): { dataUrl: string; mimeType: string } {
+  const maxDim = 1024;
+  const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Canvas context unavailable");
+  }
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const compressed = canvas.toDataURL("image/jpeg", 0.8);
+  return { dataUrl: compressed, mimeType: "image/jpeg" };
+}
+
 async function compressImageFile(file: File): Promise<{ dataUrl: string; mimeType: string }> {
+  const isImageMime = file.type.startsWith("image/");
+  const isImageExt = /\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(file.name);
+  if (!isImageMime && !isImageExt) {
+    throw new Error("UNSUPPORTED_FILE");
+  }
+
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Read error"));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("Image decode error"));
-      img.onload = () => {
-        const maxDim = 1024;
-        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          resolve({ dataUrl: String(reader.result), mimeType: file.type || "image/jpeg" });
-          return;
-        }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const compressed = canvas.toDataURL("image/jpeg", 0.8);
-        resolve({ dataUrl: compressed, mimeType: "image/jpeg" });
-      };
-      img.src = String(reader.result);
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        resolve(drawResizedImage(img));
+      } catch (err) {
+        reject(err);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
-    reader.readAsDataURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Read error"));
+      reader.onload = () => {
+        const fallbackImg = new Image();
+        fallbackImg.onerror = () => reject(new Error("Image decode error"));
+        fallbackImg.onload = () => {
+          try {
+            resolve(drawResizedImage(fallbackImg));
+          } catch {
+            resolve({ dataUrl: String(reader.result), mimeType: file.type || "image/jpeg" });
+          }
+        };
+        fallbackImg.src = String(reader.result);
+      };
+      reader.readAsDataURL(file);
+    };
+    img.src = objectUrl;
   });
 }
 
@@ -103,6 +133,8 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
   onChangeTab,
   chatInput,
   onChangeChatInput,
+  autoAskRequest,
+  onAutoAskHandled,
   onFindHospital,
   history,
   onSaveHistory,
@@ -114,6 +146,7 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
   const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
   const [imageDescription, setImageDescription] = useState("");
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const [imageResult, setImageResult] = useState<ImageAnalysisResponse | null>(null);
   const [maskingPhotoId, setMaskingPhotoId] = useState<string | null>(null);
@@ -124,6 +157,9 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const imageResultRef = useRef<HTMLDivElement | null>(null);
+  const lastHandledAutoIdRef = useRef<number | null>(null);
 
   const handleSendChat = async (overridePrompt?: string) => {
     const textToSend = (overridePrompt ?? chatInput).trim();
@@ -146,6 +182,9 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
 
     setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 60);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
     try {
       const historyPayload = nextMessages.slice(-6).map((m) => ({
         role: m.role,
@@ -155,6 +194,7 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
       const res = await fetch("/api/triage/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           message: textToSend,
           history: historyPayload,
@@ -188,12 +228,16 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
         result: triage,
       });
     } catch (err) {
-      const errMsg =
-        err instanceof Error
-          ? err.message
-          : language === "vi"
-          ? "Không thể kết nối AI lúc này."
-          : "Unable to reach AI triage service.";
+      const isTimeout = err instanceof DOMException && err.name === "AbortError";
+      const errMsg = isTimeout
+        ? language === "vi"
+          ? "Kết nối AI bị quá thời gian phản hồi. Vui lòng thử lại hoặc gọi ngay 115 nếu khẩn cấp."
+          : "AI request timed out. Please try again or call 115 immediately if urgent."
+        : err instanceof Error
+        ? err.message
+        : language === "vi"
+        ? "Không thể kết nối AI lúc này."
+        : "Unable to reach AI triage service.";
       setMessages((prev) => [
         ...prev,
         {
@@ -205,16 +249,33 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
         },
       ]);
     } finally {
+      clearTimeout(timeoutId);
       setIsSendingChat(false);
       setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
     }
   };
+
+  useEffect(() => {
+    if (!autoAskRequest || lastHandledAutoIdRef.current === autoAskRequest.id) return;
+    lastHandledAutoIdRef.current = autoAskRequest.id;
+    handleSendChat(autoAskRequest.prompt);
+    onAutoAskHandled?.();
+  }, [autoAskRequest]);
 
   const handleFilesSelected = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setImageError(null);
 
     const remaining = 4 - photos.length;
+    if (remaining <= 0) {
+      setImageError(
+        language === "vi"
+          ? "Đã đạt tối đa 4 ảnh. Vui lòng xóa bớt ảnh cũ trước khi thêm ảnh mới."
+          : "Maximum of 4 photos reached. Remove an existing photo before adding another."
+      );
+      return;
+    }
+
     const selected = Array.from(files).slice(0, remaining);
 
     try {
@@ -233,8 +294,8 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
     } catch {
       setImageError(
         language === "vi"
-          ? "Không thể đọc tệp ảnh này. Vui lòng thử ảnh JPEG hoặc PNG khác."
-          : "Could not load selected image. Please try another JPEG or PNG photo."
+          ? "Không thể đọc tệp ảnh này. Vui lòng chọn ảnh JPEG, PNG hoặc WebP hợp lệ."
+          : "Could not load selected image. Please choose a valid JPEG, PNG, or WebP photo."
       );
     }
   };
@@ -244,6 +305,9 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
     setImageError(null);
     setIsAnalyzingImage(true);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
     try {
       const payloadImages = photos
         .map((p) => ({
@@ -251,6 +315,14 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
           mimeType: p.mimeType,
         }))
         .filter((img) => img.base64.length > 0);
+
+      if (payloadImages.length === 0) {
+        throw new Error(
+          language === "vi"
+            ? "Ảnh không hợp lệ. Vui lòng chọn lại ảnh khác."
+            : "Invalid image data. Please select another photo."
+        );
+      }
 
       const totalBase64Length = payloadImages.reduce((sum, img) => sum + img.base64.length, 0);
       if (totalBase64Length > 4_200_000) {
@@ -264,6 +336,7 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
       const res = await fetch("/api/triage/image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           images: payloadImages,
           description: imageDescription,
@@ -279,6 +352,9 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
           : "Image analysis failed. Call 115 if urgent."
       );
       setImageResult(parsed);
+      setTimeout(() => {
+        imageResultRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 80);
 
       onSaveHistory({
         id: `hist-img-${Date.now()}`,
@@ -291,14 +367,20 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
         thumbnailCount: photos.length,
       });
     } catch (err) {
+      const isTimeout = err instanceof DOMException && err.name === "AbortError";
       setImageError(
-        err instanceof Error
+        isTimeout
+          ? language === "vi"
+            ? "Phân tích hình ảnh bị quá thời gian phản hồi. Vui lòng thử lại với ảnh rõ/nhẹ hơn hoặc gọi 115 nếu khẩn cấp."
+            : "Image analysis timed out. Please retry or call 115 immediately if urgent."
+          : err instanceof Error
           ? err.message
           : language === "vi"
           ? "Không thể phân tích hình ảnh lúc này. Hãy gọi 115 nếu khẩn cấp."
           : "Could not analyze image right now. Call 115 if urgent."
       );
     } finally {
+      clearTimeout(timeoutId);
       setIsAnalyzingImage(false);
     }
   };
@@ -603,6 +685,7 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
                     >
                       <div className="flex flex-col gap-2 rounded-2xl border border-slate-700/80 bg-[#070E1A] p-2 transition-colors focus-within:border-cyan-500/70 focus-within:bg-[#0D1829] sm:flex-row sm:items-end">
                         <textarea
+                          ref={chatTextareaRef}
                           rows={2}
                           value={chatInput}
                           onChange={(e) => onChangeChatInput(e.target.value)}
@@ -673,12 +756,26 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
 
                   {/* Upload & Direct Mobile Camera Controls */}
                   <div
-                    onDragOver={(e) => e.preventDefault()}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragging(true);
+                    }}
+                    onDragLeave={() => setIsDragging(false)}
                     onDrop={(e) => {
                       e.preventDefault();
+                      setIsDragging(false);
                       handleFilesSelected(e.dataTransfer.files);
                     }}
-                    className="mt-4 rounded-2xl border-2 border-dashed border-cyan-800/60 bg-gradient-to-br from-[#0E1B2F] via-[#0B1526] to-[#0D1D2E] p-6 text-center transition-colors hover:border-cyan-500/70"
+                    onClick={(e) => {
+                      const target = e.target as HTMLElement;
+                      if (target.closest("button")) return;
+                      fileInputRef.current?.click();
+                    }}
+                    className={`mt-4 cursor-pointer rounded-2xl border-2 border-dashed bg-gradient-to-br from-[#0E1B2F] via-[#0B1526] to-[#0D1D2E] p-6 text-center transition-colors ${
+                      isDragging
+                        ? "border-cyan-400 bg-[#132642]/70"
+                        : "border-cyan-800/60 hover:border-cyan-500/70"
+                    }`}
                   >
                     <input
                       ref={fileInputRef}
@@ -711,8 +808,8 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
                     </p>
                     <p className="mt-1 text-xs text-slate-400">
                       {language === "vi"
-                        ? "Hỗ trợ gửi tối đa 4 ảnh (vd: ảnh tổng thể + ảnh cận cảnh)."
-                        : "Upload up to 4 photos (e.g., wide context + close-up)."}
+                        ? "Nhấp vào khung này hoặc kéo thả tối đa 4 ảnh (vd: ảnh tổng thể + ảnh cận cảnh)."
+                        : "Click this box or drag & drop up to 4 photos (e.g., wide context + close-up)."}
                     </p>
 
                     <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
@@ -840,7 +937,7 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
                   )}
 
                   {imageResult && (
-                    <div className="mt-6">
+                    <div ref={imageResultRef} className="mt-6">
                       <TriageResultCard
                         result={imageResult}
                         language={language}
@@ -848,6 +945,7 @@ export const HeroTriageHub: React.FC<HeroTriageHubProps> = ({
                         onAskFollowUp={(contextText) => {
                           onChangeTab("chat");
                           onChangeChatInput(contextText);
+                          setTimeout(() => chatTextareaRef.current?.focus(), 80);
                         }}
                       />
                     </div>

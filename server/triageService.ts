@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 
 export type TriageLanguage = "vi" | "en";
 export type TriageSeverity = "RED" | "YELLOW" | "GREEN";
@@ -31,6 +31,7 @@ export interface TriageServiceErrorPayload {
   status: number;
   error: string;
   message: string;
+  detail?: string;
 }
 
 const DEFAULT_REFERENCES: MedicalReference[] = [
@@ -58,6 +59,83 @@ const ALLOWED_IMAGE_MIMES = new Set([
   "image/webp",
   "image/gif",
 ]);
+
+const PRIMARY_MODEL = "gemini-4-hydrogen";
+const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+const PRIMARY_TIMEOUT_MS = 6000;
+
+function isTransientHighDemandError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg === "PRIMARY_MODEL_TIMEOUT" ||
+    msg.includes("503") ||
+    msg.includes("UNAVAILABLE") ||
+    msg.includes("high demand") ||
+    msg.includes("429") ||
+    msg.includes("RESOURCE_EXHAUSTED")
+  );
+}
+
+function callWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("PRIMARY_MODEL_TIMEOUT")), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+async function generateWithModelFallback(
+  ai: GoogleGenAI,
+  request: {
+    contents: unknown;
+    config: Record<string, unknown>;
+  }
+) {
+  const attempts: Array<{ model: string; delayMs: number; timeoutMs: number; useLowThinking: boolean }> = [
+    { model: PRIMARY_MODEL, delayMs: 0, timeoutMs: PRIMARY_TIMEOUT_MS, useLowThinking: true },
+    { model: FALLBACK_MODEL, delayMs: 250, timeoutMs: 7000, useLowThinking: false },
+    { model: FALLBACK_MODEL, delayMs: 900, timeoutMs: 8000, useLowThinking: false },
+    { model: PRIMARY_MODEL, delayMs: 1200, timeoutMs: 8000, useLowThinking: true },
+  ];
+
+  let lastErr: unknown;
+  for (const attempt of attempts) {
+    if (attempt.delayMs > 0) {
+      await new Promise((r) => setTimeout(r, attempt.delayMs));
+    }
+    try {
+      const cfg = attempt.useLowThinking
+        ? { ...request.config, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+        : request.config;
+      return await callWithTimeout(
+        ai.models.generateContent({
+          model: attempt.model,
+          contents: request.contents as never,
+          config: cfg as never,
+        }),
+        attempt.timeoutMs
+      );
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientHighDemandError(err)) {
+        throw err;
+      }
+      console.warn(
+        `[AnTâm 115] ${attempt.model} transient error, continuing fallback/retry:`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+  throw lastErr;
+}
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -335,7 +413,8 @@ export function mapGeminiError(
   language: TriageLanguage
 ): TriageServiceErrorPayload {
   console.error("Gemini API error:", err);
-  const msg = err instanceof Error ? err.message : String(err);
+  const rawMsg = err instanceof Error ? err.message : String(err);
+  const msg = rawMsg.replace(/AIza[0-9A-Za-z_-]{20,}/g, "[REDACTED]").slice(0, 240);
 
   if (
     msg === "MISSING_API_KEY" ||
@@ -349,17 +428,26 @@ export function mapGeminiError(
         language === "en"
           ? "AI service key is missing or invalid. Please configure GEMINI_API_KEY in environment settings."
           : "Khóa dịch vụ AI (GEMINI_API_KEY) chưa được cấu hình hoặc không hợp lệ.",
+      detail: msg,
     };
   }
 
-  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
+  if (
+    msg.includes("429") ||
+    msg.includes("RESOURCE_EXHAUSTED") ||
+    msg.includes("503") ||
+    msg.includes("UNAVAILABLE") ||
+    msg.includes("high demand") ||
+    msg === "PRIMARY_MODEL_TIMEOUT"
+  ) {
     return {
-      status: 429,
-      error: "RATE_LIMIT",
+      status: 503,
+      error: "SERVICE_TEMPORARILY_BUSY",
       message:
         language === "en"
-          ? "AI service is temporarily busy. For urgent emergencies, please call 115 immediately."
-          : "Hệ thống AI đang quá tải tạm thời. Nếu đang khẩn cấp, hãy gọi ngay 115.",
+          ? "AI service is experiencing temporary high demand. Please retry in a few seconds, or call 115 immediately for emergencies."
+          : "Hệ thống AI đang có lượng truy cập cao tạm thời. Vui lòng thử lại sau vài giây, hoặc gọi ngay 115 nếu khẩn cấp.",
+      detail: msg,
     };
   }
 
@@ -370,6 +458,7 @@ export function mapGeminiError(
       language === "en"
         ? "Could not complete AI analysis right now. Please follow the vetted injury guide below or call 115."
         : "Không thể kết nối phân tích AI lúc này. Vui lòng xem hướng dẫn sơ cứu chuẩn bên dưới hoặc gọi 115.",
+    detail: msg,
   };
 }
 
@@ -415,8 +504,7 @@ export async function runChatTriage(input: {
       ? `Previous context:\n${conversationContext}\n\nCurrent question:\n${message}`
       : message;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-4-hydrogen",
+    const response = await generateWithModelFallback(ai, {
       contents: promptText,
       config: {
         systemInstruction: buildChatSystemInstruction(language),
@@ -502,8 +590,7 @@ Privacy masking applied by user: ${privacyMasked ? "Yes (some background/non-wou
 Mô tả thêm từ người dùng: ${description || "Không có mô tả thêm."}
 Người dùng đã che/làm mờ vùng không liên quan: ${privacyMasked ? "Có (một số vùng xung quanh có thể đã được làm mờ để bảo mật)" : "Không"}.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-4-hydrogen",
+    const response = await generateWithModelFallback(ai, {
       contents: {
         parts: [...imageParts, { text: textPrompt }],
       },

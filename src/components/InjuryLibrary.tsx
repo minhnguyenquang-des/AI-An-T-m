@@ -9,6 +9,7 @@ import {
   Eye,
   Flame,
   MessageSquare,
+  Search,
   Wind,
   X,
   XCircle,
@@ -19,6 +20,9 @@ import { InjuryGuide, Language } from "../types/triage";
 interface InjuryLibraryProps {
   language: Language;
   searchQuery: string;
+  onChangeSearchQuery: (val: string) => void;
+  externalGuideId?: string | null;
+  onClearExternalGuide?: () => void;
   onAskAiForGuide: (prompt: string) => void;
 }
 
@@ -35,10 +39,22 @@ const iconMap = {
 export const InjuryLibrary: React.FC<InjuryLibraryProps> = ({
   language,
   searchQuery,
+  onChangeSearchQuery,
+  externalGuideId,
+  onClearExternalGuide,
   onAskAiForGuide,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [activeGuide, setActiveGuide] = useState<InjuryGuide | null>(null);
+
+  useEffect(() => {
+    if (!externalGuideId) return;
+    const found = INJURY_GUIDES.find((g) => g.id === externalGuideId);
+    if (found) {
+      setActiveGuide(found);
+    }
+    onClearExternalGuide?.();
+  }, [externalGuideId, onClearExternalGuide]);
 
   useEffect(() => {
     if (!activeGuide) return;
@@ -98,6 +114,31 @@ export const InjuryLibrary: React.FC<InjuryLibraryProps> = ({
                 ? "Tra cứu nhanh quy trình xử trí chuẩn y khoa cho từng dạng tai nạn pháo, kể cả khi không tải ảnh lên AI."
                 : "Quick access to vetted first-aid protocols for every firework trauma category."}
             </p>
+          </div>
+
+          {/* Inline Search Filter */}
+          <div className="relative w-full md:w-72 shrink-0">
+            <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-stone-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => onChangeSearchQuery(e.target.value)}
+              placeholder={
+                language === "vi" ? "Tìm hướng dẫn chấn thương..." : "Search injury guides..."
+              }
+              aria-label={language === "vi" ? "Tìm hướng dẫn chấn thương" : "Search injury guides"}
+              className="min-h-[40px] w-full rounded-md border border-stone-300 bg-white pr-9 pl-9 text-xs text-stone-900 placeholder:text-stone-500 focus:border-[#0A1322] focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-stone-100 dark:placeholder:text-slate-400 dark:focus:border-cyan-400"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => onChangeSearchQuery("")}
+                className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-stone-500 hover:bg-stone-100 hover:text-stone-900 dark:text-slate-400 dark:hover:bg-slate-800"
+                aria-label={language === "vi" ? "Xóa tìm kiếm" : "Clear search"}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
 

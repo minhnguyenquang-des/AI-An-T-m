@@ -25,6 +25,11 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showHospitalModal, setShowHospitalModal] = useState(false);
+  const [selectedGuideId, setSelectedGuideId] = useState<string | null>(null);
+  const [selectedFaqId, setSelectedFaqId] = useState<string | null>(null);
+  const [autoAskRequest, setAutoAskRequest] = useState<{ id: number; prompt: string } | null>(
+    null
+  );
 
   const [history, setHistory] = useState<HistoryEntry[]>(() => {
     try {
@@ -71,9 +76,13 @@ export default function App() {
     document.getElementById("hero-triage")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleAskAiPrefill = (prompt: string) => {
+  const handleAskAiPrefill = (prompt: string, autoSend = false) => {
     setActiveTab("chat");
-    setChatInput(prompt);
+    if (autoSend) {
+      setAutoAskRequest({ id: Date.now(), prompt });
+    } else {
+      setChatInput(prompt);
+    }
     document.getElementById("hero-triage")?.scrollIntoView({ behavior: "smooth" });
   };
 
@@ -95,6 +104,8 @@ export default function App() {
           onChangeTab={setActiveTab}
           chatInput={chatInput}
           onChangeChatInput={setChatInput}
+          autoAskRequest={autoAskRequest}
+          onAutoAskHandled={() => setAutoAskRequest(null)}
           onFindHospital={() => setShowHospitalModal(true)}
           history={history}
           onSaveHistory={handleSaveHistory}
@@ -104,13 +115,17 @@ export default function App() {
         <InjuryLibrary
           language={language}
           searchQuery={searchQuery}
-          onAskAiForGuide={handleAskAiPrefill}
+          onChangeSearchQuery={setSearchQuery}
+          externalGuideId={selectedGuideId}
+          onClearExternalGuide={() => setSelectedGuideId(null)}
+          onAskAiForGuide={(prompt) => handleAskAiPrefill(prompt, false)}
         />
 
         <VideoIllustrationSection language={language} />
 
         <PreventionAndFaq
           language={language}
+          externalFaqId={selectedFaqId}
           onFindHospital={() => setShowHospitalModal(true)}
         />
       </main>
@@ -130,10 +145,15 @@ export default function App() {
           query={searchQuery}
           onChangeQuery={setSearchQuery}
           onClose={() => setShowSearchModal(false)}
-          onAskAi={handleAskAiPrefill}
-          onSelectGuideSection={() =>
-            document.getElementById("injury-guides")?.scrollIntoView({ behavior: "smooth" })
-          }
+          onAskAi={(prompt) => handleAskAiPrefill(prompt, true)}
+          onSelectGuide={(guideId) => {
+            setSelectedGuideId(guideId);
+            document.getElementById("injury-guides")?.scrollIntoView({ behavior: "smooth" });
+          }}
+          onSelectFaq={(faqId) => {
+            setSelectedFaqId(faqId);
+            document.getElementById("faq-emergency")?.scrollIntoView({ behavior: "smooth" });
+          }}
         />
       )}
     </div>

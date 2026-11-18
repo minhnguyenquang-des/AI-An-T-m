@@ -26,7 +26,11 @@ app.post("/api/triage/chat", async (req, res) => {
   if (!result.ok) {
     return res
       .status(result.error.status)
-      .json({ error: result.error.error, message: result.error.message });
+      .json({
+        error: result.error.error,
+        message: result.error.message,
+        detail: result.error.detail,
+      });
   }
   return res.json(result.data);
 });
@@ -36,7 +40,11 @@ app.post("/api/triage/image", async (req, res) => {
   if (!result.ok) {
     return res
       .status(result.error.status)
-      .json({ error: result.error.error, message: result.error.message });
+      .json({
+        error: result.error.error,
+        message: result.error.message,
+        detail: result.error.detail,
+      });
   }
   return res.json(result.data);
 });

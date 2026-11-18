@@ -9,7 +9,8 @@ interface QuickSearchModalProps {
   onChangeQuery: (val: string) => void;
   onClose: () => void;
   onAskAi: (prompt: string) => void;
-  onSelectGuideSection: () => void;
+  onSelectGuide: (guideId: string) => void;
+  onSelectFaq: (faqId: string) => void;
 }
 
 export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
@@ -18,7 +19,8 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
   onChangeQuery,
   onClose,
   onAskAi,
-  onSelectGuideSection,
+  onSelectGuide,
+  onSelectFaq,
 }) => {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -27,17 +29,19 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
+
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     const guides = INJURY_GUIDES.filter((g) => {
       if (!q) return true;
-      return `${g.title[language]} ${g.shortSummary[language]}`.toLowerCase().includes(q);
-    }).slice(0, 4);
+      const hay = `${g.title[language]} ${g.shortSummary[language]} ${g.firstAidSteps[language].join(" ")}`.toLowerCase();
+      return hay.includes(q);
+    }).slice(0, 5);
 
     const faqs = FAQ_ITEMS.filter((f) => {
       if (!q) return true;
       return `${f.question[language]} ${f.answer[language]}`.toLowerCase().includes(q);
-    }).slice(0, 3);
+    }).slice(0, 4);
 
     return { guides, faqs };
   }, [query, language]);
@@ -59,6 +63,13 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
             autoFocus
             value={query}
             onChange={(e) => onChangeQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && query.trim()) {
+                e.preventDefault();
+                onAskAi(query.trim());
+                onClose();
+              }
+            }}
             placeholder={
               language === "vi"
                 ? "Tìm kiếm nhanh (vd: bỏng tay, chấn thương mắt, cầm máu)..."
@@ -66,10 +77,20 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
             }
             className="min-h-[40px] flex-1 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none dark:text-slate-100"
           />
+          {query && (
+            <button
+              type="button"
+              onClick={() => onChangeQuery("")}
+              className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+            >
+              {language === "vi" ? "Xóa" : "Clear"}
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
             className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+            aria-label="Close"
           >
             <X className="h-4 w-4" />
           </button>
@@ -86,12 +107,14 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
               className="flex w-full items-center justify-between rounded-xl border border-orange-200 bg-orange-50/70 px-4 py-3 text-left text-xs font-semibold text-orange-900 hover:bg-orange-100 dark:border-orange-900/60 dark:bg-orange-950/40 dark:text-orange-200"
             >
               <span className="flex items-center gap-2">
-                <MessageSquare className="h-4 w-4" />
-                {language === "vi"
-                  ? `Hỏi AI Sơ cứu trực tiếp về: "${query.trim()}"`
-                  : `Ask First-Aid AI directly about: "${query.trim()}"`}
+                <MessageSquare className="h-4 w-4 shrink-0" />
+                <span>
+                  {language === "vi"
+                    ? `Hỏi AI Sơ cứu trực tiếp về: "${query.trim()}"`
+                    : `Ask First-Aid AI directly about: "${query.trim()}"`}
+                </span>
               </span>
-              <ArrowRight className="h-4 w-4" />
+              <ArrowRight className="h-4 w-4 shrink-0" />
             </button>
           )}
 
@@ -99,29 +122,37 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
             <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
               {language === "vi" ? "Hướng dẫn chấn thương" : "Injury Guides"}
             </p>
-            <div className="mt-2 space-y-1.5">
-              {results.guides.map((g) => (
-                <button
-                  key={g.id}
-                  type="button"
-                  onClick={() => {
-                    onSelectGuideSection();
-                    onClose();
-                  }}
-                  className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      {g.title[language]}
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {g.shortSummary[language]}
-                    </p>
-                  </div>
-                  <ArrowRight className="h-4 w-4 shrink-0 text-slate-400" />
-                </button>
-              ))}
-            </div>
+            {results.guides.length === 0 ? (
+              <p className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-400">
+                {language === "vi"
+                  ? "Không có mục hướng dẫn cố định khớp từ khóa này. Nhấn nút 'Hỏi AI Sơ cứu' phía trên để tra cứu trực tiếp."
+                  : "No static guide matches this keyword. Click 'Ask First-Aid AI' above for immediate guidance."}
+              </p>
+            ) : (
+              <div className="mt-2 space-y-1.5">
+                {results.guides.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectGuide(g.id);
+                      onClose();
+                    }}
+                    className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {g.title[language]}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        {g.shortSummary[language]}
+                      </p>
+                    </div>
+                    <ArrowRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {results.faqs.length > 0 && (
@@ -131,14 +162,18 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
               </p>
               <div className="mt-2 space-y-1.5">
                 {results.faqs.map((f) => (
-                  <a
+                  <button
                     key={f.id}
-                    href="#faq-emergency"
-                    onClick={onClose}
-                    className="block rounded-xl px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                    type="button"
+                    onClick={() => {
+                      onSelectFaq(f.id);
+                      onClose();
+                    }}
+                    className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
                   >
-                    {f.question[language]}
-                  </a>
+                    <span>{f.question[language]}</span>
+                    <ArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  </button>
                 ))}
               </div>
             </div>

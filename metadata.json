@@ -1,0 +1,10 @@
+{
+  "name": "Remix AnTâm 115 — Sơ Cứu Chấn Thương Do Pháo \u0026 AI",
+  "description": "Cổng thông tin hướng dẫn sơ cứu tạm thời chấn thương do pháo bằng AI (hỏi đáp văn bản \u0026 phân tích hình ảnh vết thương) kết hợp thư viện y khoa chuẩn hóa và kết nối cấp cứu 115.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

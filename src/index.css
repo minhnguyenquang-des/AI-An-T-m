@@ -1,0 +1,43 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Playfair Display", "Times New Roman", Times, "Noto Serif", serif;
+  --font-sans: "Times New Roman", Times, "Noto Serif", serif;
+  --font-serif: "Times New Roman", Times, "Noto Serif", serif;
+  --font-mono: "Times New Roman", Times, "Noto Serif", serif;
+}
+
+@layer base {
+  html,
+  body {
+    scroll-behavior: smooth;
+    font-family: var(--font-sans);
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font-family: var(--font-sans);
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
